@@ -24,6 +24,8 @@ strr_multilistings <- function(daily, EH = 2, PR = 3, listing_type, host_ID,
     ungroup()
 }
 
+var_mean <- function(var) {summarize(var = mean(var)) }
+
 ## Ghost hotel function
 
 strr_ghost <- function(

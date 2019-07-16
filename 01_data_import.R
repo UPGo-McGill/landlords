@@ -41,7 +41,7 @@ property <-
     
     set_names(c(    "Property_ID", "Listing_Title", "Property_Type", "Listing_Type",
                     "Created", "Scraped", "Latitude", "Longitude", "Neighbourhood",
-                    "Bedrooms", "Calender_Last_Update", "Response_Rate", 
+                    "Bedrooms", "Last_Update", "Response_Rate", 
                     "Superhost", "HomeAway_PP", "Cancellation_Policy", "Security_Deposit",
                     "Cleaning_Fee", "Ex_People_Fee", "Checkin_Time", "Checkout_Time",
                     "Minimum_Stay", "Reviews", "Photos", "Instantbook", "Rating",
@@ -149,4 +149,58 @@ property <-
   summarize(ML = as.logical(ceiling(mean(ML)))) %>% 
   inner_join(property, .)
 
-property2 <- property %>% mutate(FREH = as.)
+total_listings <-as.data.frame(table(property$Airbnb_HID))
+
+property_correlation <- property %>% 
+  mutate(FREH = as.binary(FREH, logic=TRUE),
+         ML = as.binary(ML, logic=TRUE),
+         Superhost = as.binary(Superhost, logic=TRUE),
+         Instantbook = as.binary(Instantbook, logic=TRUE),
+         Last_Update = difftime(Scraped, Last_Update, units = "days"),
+         Age = difftime(Scraped, Created, units = "days"),
+         Downtown = if_else(Neighbourhood == "Ville-Marie" | Neighbourhood == "Le Plateau-Mont-Royal", 1, 0),
+         Cancellation_Policy = case_when(
+           str_detect(Cancellation_Policy, "Flexible")     ~ 0,
+           str_detect(Cancellation_Policy, "Moderate")     ~ 1,
+           str_detect(Cancellation_Policy, "Strict")      ~ 2),
+         Checkin_Time = as.binary(if_else(is.na(Checkin_Time) | Checkin_Time == "Flexible", 0, 1), logic = TRUE),
+         Checkout_Time = as.binary(if_else(is.na(Checkout_Time), 0, 1), logic = TRUE),
+         Security_Deposit = as.binary(if_else(is.na(Security_Deposit), 0, 1), logic = TRUE),
+         Cleaning_Fee = as.binary(if_else(is.na(Cleaning_Fee), 0, 1), logic = TRUE),
+         Ex_People_Fee = as.binary(if_else(is.na(Ex_People_Fee), 0, 1), logic = TRUE),
+         HomeAway_PID = as.binary(if_else(is.na(HomeAway_PID), 0, 1), logic = TRUE),
+         Occupancy_Rate = if_else(n_available == 0, 0, n_reserved/(n_reserved + n_available))) %>% 
+  select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID) %>% st_drop_geometry()
+
+
+property2 <- property %>% 
+  mutate(FREH = as.binary(FREH, logic=TRUE),
+        ML = as.binary(ML, logic=TRUE),
+        Superhost = as.binary(Superhost, logic=TRUE),
+        Instantbook = as.binary(Instantbook, logic=TRUE),
+        Last_Update = difftime(Scraped, Calender_Last_Update, units = "days"),
+        Age = difftime(Scraped, Created, units = "days"),
+        Downtown = if_else(Neighbourhood == "Ville-Marie" | Neighbourhood == "Le Plateau-Mont-Royal", 1, 0),
+        Cancellation_Policy = case_when(
+          str_detect(Cancellation_Policy, "Flexible")     ~ 0,
+          str_detect(Cancellation_Policy, "Moderate")     ~ 1,
+          str_detect(Cancellation_Policy, "Strict")      ~ 2),
+        Checkin_Time = as.binary(if_else(is.na(Checkin_Time) | Checkin_Time == "Flexible", 0, 1), logic = TRUE),
+        Checkout_Time = as.binary(if_else(is.na(Checkout_Time), 0, 1), logic = TRUE),
+        Security_Deposit = as.binary(if_else(is.na(Security_Deposit), 0, 1), logic = TRUE),
+        Cleaning_Fee = as.binary(if_else(is.na(Cleaning_Fee), 0, 1), logic = TRUE),
+        Ex_People_Fee = as.binary(if_else(is.na(Ex_People_Fee), 0, 1), logic = TRUE),
+        HomeAway_PID = as.binary(if_else(is.na(HomeAway_PID), 0, 1), logic = TRUE),
+        Occupancy_Rate = if_else(n_available == 0, 0, n_reserved/(n_reserved + n_available))) %>% 
+  select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID, -Calender_Last_Update) %>% st_drop_geometry()
+
+
+property_correlation <- 
+  property2 %>%
+  group_by(Airbnb_HID) %>% 
+  summarise_all(mean)
+          
+  inner_join(property, .)
+
+cor(property2$FREH, property2$Response_Rate, use = "complete.obs")
+
