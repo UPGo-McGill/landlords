@@ -6,6 +6,8 @@
 library(tidyverse)
 library(sf)
 library(binaryLogic)
+library(Hmisc)
+library(corrplot)
 
 ## Multilistings function
 
@@ -24,7 +26,17 @@ strr_multilistings <- function(daily, EH = 2, PR = 3, listing_type, host_ID,
     ungroup()
 }
 
-var_mean <- function(var) {summarize(var = mean(var)) }
+##function for viewing correlation matrix as a list
+flattenCorrMatrix <- function(cormat, pmat) {
+  ut <- upper.tri(cormat)
+  data.frame(
+    row = rownames(cormat)[row(cormat)[ut]],
+    column = rownames(cormat)[col(cormat)[ut]],
+    cor  =(cormat)[ut],
+    p = pmat[ut]
+  )
+}
+
 
 ## Ghost hotel function
 

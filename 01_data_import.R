@@ -32,7 +32,6 @@ property <-
     `Minimum Stay` = col_double(),
     `Number of Reviews` = col_double(),
     `Number of Photos` = col_double(), 
-    `Instantbook Enabled` = col_logical(),
     `Overall Rating` = col_double(),
     `Airbnb Property ID` = col_double(),
     `Airbnb Host ID` = col_double(),
@@ -44,7 +43,7 @@ property <-
                     "Bedrooms", "Last_Update", "Response_Rate", 
                     "Superhost", "HomeAway_PP", "Cancellation_Policy", "Security_Deposit",
                     "Cleaning_Fee", "Ex_People_Fee", "Checkin_Time", "Checkout_Time",
-                    "Minimum_Stay", "Reviews", "Photos", "Instantbook", "Rating",
+                    "Minimum_Stay", "Reviews", "Photos", "Rating",
                     "Airbnb_PID", "Airbnb_HID", "HomeAway_PID", "HomeAway_Manager")) %>% 
   arrange(Property_ID) %>% 
   st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326) %>%
@@ -149,58 +148,55 @@ property <-
   summarize(ML = as.logical(ceiling(mean(ML)))) %>% 
   inner_join(property, .)
 
-total_listings <-as.data.frame(table(property$Airbnb_HID))
-
-property_correlation <- property %>% 
-  mutate(FREH = as.binary(FREH, logic=TRUE),
-         ML = as.binary(ML, logic=TRUE),
-         Superhost = as.binary(Superhost, logic=TRUE),
-         Instantbook = as.binary(Instantbook, logic=TRUE),
-         Last_Update = difftime(Scraped, Last_Update, units = "days"),
-         Age = difftime(Scraped, Created, units = "days"),
-         Downtown = if_else(Neighbourhood == "Ville-Marie" | Neighbourhood == "Le Plateau-Mont-Royal", 1, 0),
-         Cancellation_Policy = case_when(
-           str_detect(Cancellation_Policy, "Flexible")     ~ 0,
-           str_detect(Cancellation_Policy, "Moderate")     ~ 1,
-           str_detect(Cancellation_Policy, "Strict")      ~ 2),
-         Checkin_Time = as.binary(if_else(is.na(Checkin_Time) | Checkin_Time == "Flexible", 0, 1), logic = TRUE),
-         Checkout_Time = as.binary(if_else(is.na(Checkout_Time), 0, 1), logic = TRUE),
-         Security_Deposit = as.binary(if_else(is.na(Security_Deposit), 0, 1), logic = TRUE),
-         Cleaning_Fee = as.binary(if_else(is.na(Cleaning_Fee), 0, 1), logic = TRUE),
-         Ex_People_Fee = as.binary(if_else(is.na(Ex_People_Fee), 0, 1), logic = TRUE),
-         HomeAway_PID = as.binary(if_else(is.na(HomeAway_PID), 0, 1), logic = TRUE),
-         Occupancy_Rate = if_else(n_available == 0, 0, n_reserved/(n_reserved + n_available))) %>% 
-  select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID) %>% st_drop_geometry()
+total_listings <-as.data.frame(table(property$Airbnb_HID, dnn = "Airbnb_HID"), responseName =  "Total_Listings") %>% mutate(Airbnb_HID = as.numeric(as.character(Airbnb_HID)))
 
 
-property2 <- property %>% 
+##convert variables to numeric for calculations
+
+property_numeric <- property %>% 
   mutate(FREH = as.binary(FREH, logic=TRUE),
         ML = as.binary(ML, logic=TRUE),
         Superhost = as.binary(Superhost, logic=TRUE),
-        Instantbook = as.binary(Instantbook, logic=TRUE),
-        Last_Update = difftime(Scraped, Calender_Last_Update, units = "days"),
-        Age = difftime(Scraped, Created, units = "days"),
+        Last_Update = as.numeric(difftime(Scraped, Calender_Last_Update, units = "days")),
+        Age = as.numeric(difftime(Scraped, Created, units = "days")),
         Downtown = if_else(Neighbourhood == "Ville-Marie" | Neighbourhood == "Le Plateau-Mont-Royal", 1, 0),
-        Cancellation_Policy = case_when(
+        Cancellation_Strictness = case_when(
           str_detect(Cancellation_Policy, "Flexible")     ~ 0,
           str_detect(Cancellation_Policy, "Moderate")     ~ 1,
-          str_detect(Cancellation_Policy, "Strict")      ~ 2),
+          str_detect(Cancellation_Policy, "Strict")       ~ 2),
         Checkin_Time = as.binary(if_else(is.na(Checkin_Time) | Checkin_Time == "Flexible", 0, 1), logic = TRUE),
         Checkout_Time = as.binary(if_else(is.na(Checkout_Time), 0, 1), logic = TRUE),
         Security_Deposit = as.binary(if_else(is.na(Security_Deposit), 0, 1), logic = TRUE),
         Cleaning_Fee = as.binary(if_else(is.na(Cleaning_Fee), 0, 1), logic = TRUE),
         Ex_People_Fee = as.binary(if_else(is.na(Ex_People_Fee), 0, 1), logic = TRUE),
         HomeAway_PID = as.binary(if_else(is.na(HomeAway_PID), 0, 1), logic = TRUE),
-        Occupancy_Rate = if_else(n_available == 0, 0, n_reserved/(n_reserved + n_available))) %>% 
-  select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID, -Calender_Last_Update) %>% st_drop_geometry()
+        Occupancy_Rate = if_else(n_available == 0, 0, n_reserved/n_available)) %>% 
+  select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID, -Calender_Last_Update, -Cancellation_Policy) %>% st_drop_geometry()
 
 
-property_correlation <- 
-  property2 %>%
+##Group by host and make summary variables for each of their listings
+property_correlation <- property_numeric %>%
   group_by(Airbnb_HID) %>% 
-  summarise_all(mean)
-          
-  inner_join(property, .)
+  summarise_all(list(mean)) %>%
+  inner_join(total_listings, .) 
+ 
+  
+property_correlation$Total_Listings <- scale(property_correlation$Total_Listings)
+rcorr(total)
 
-cor(property2$FREH, property2$Response_Rate, use = "complete.obs")
+cor(property_correlation$Total_Listings, property_correlation$ML, use = "complete.obs")
 
+
+corr_matrix <- property_correlation %>% 
+                select(-Airbnb_HID) %>% 
+                mutate(total_listings %>% index()) %>%
+                as.matrix() %>% 
+                rcorr()
+
+corr_matrix <- flattenCorrMatrix(corr_matrix$r, corr_matrix$P)
+
+
+write.csv(corr_matrix, 'corr_matrix1.csv')
+
+corrplot(as.matrix(property_correlation), is.corr=FALSE)
+?corrplot
