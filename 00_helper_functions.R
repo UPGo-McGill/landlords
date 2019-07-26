@@ -8,10 +8,12 @@ library(sf)
 library(binaryLogic)
 library(Hmisc)
 library(corrplot)
+library(corrr)
+library(data.table)
 
 ## Multilistings function
 
-strr_multilistings <- function(daily, EH = 2, PR = 3, listing_type, host_ID,
+strr_multilistings <- function(daily, EH = 2, TL = 3, listing_type, host_ID,
                                date, cores){
   
   listing_type <- enquo(listing_type)
@@ -19,23 +21,51 @@ strr_multilistings <- function(daily, EH = 2, PR = 3, listing_type, host_ID,
   date <- enquo(date)
   
   daily %>%
-    group_by(!! listing_type, !! host_ID, !! date)  %>%
+    group_by(!! host_ID, !! listing_type, !! date)  %>%
     mutate(ML = ifelse(
       n() >= EH & !! listing_type == "Entire home/apt", TRUE,
-      ifelse(n() >= PR & !! listing_type == "Private room", TRUE, FALSE))) %>%
+      ifelse(n() >= TL, TRUE, FALSE))) %>%
     ungroup()
 }
 
-##function for viewing correlation matrix as a list
-flattenCorrMatrix <- function(cormat, pmat) {
-  ut <- upper.tri(cormat)
-  data.frame(
-    row = rownames(cormat)[row(cormat)[ut]],
-    column = rownames(cormat)[col(cormat)[ut]],
-    cor  =(cormat)[ut],
-    p = pmat[ut]
-  )
+
+##FREH function
+
+strr_FREH <- function(daily, start_date, end_date, R_cut = 90, AR_cut = 183,
+                      cores = 1) {
+  # Wrangle dates
+  start_date <- as.Date(start_date, origin = "1970-01-01")
+  end_date <- as.Date(end_date, origin = "1970-01-01")
+  # Filter daily file
+  setDT(daily)
+  daily <-
+    daily[Status %in% c("A", "R") & Date >= start_date - 364 &
+            Date <= end_date & Listing_Type == "Entire home/apt"]
+  if (cores > 1) {
+    cl <- parallel::makeForkCluster(cores)
+    pbapply::pblapply(start_date:end_date, function(date) {
+      daily <- daily[Date >= date - 364 & Date <= date]
+      daily[, AR := .N, by = Property_ID]
+      daily[, R := sum(Status == "R"), by = Property_ID]
+      daily[, list(Date = as.Date(date, origin = "1970-01-01"),
+                   FREH = as.logical((mean(AR) >= AR_cut) * (mean(R) >= R_cut))),
+            by = Property_ID]
+    }) %>% rbindlist()
+  } else {
+    lapply(start_date:end_date, function(date) {
+      daily <- daily[Date >= date - 364 & Date <= date]
+      daily[, AR := .N, by = Property_ID]
+      daily[, R := sum(Status == "R"), by = Property_ID]
+      daily[, list(Date = as.Date(date, origin = "1970-01-01"),
+                   FREH = as.logical((mean(AR) >= AR_cut) * (mean(R) >= R_cut))),
+            by = Property_ID]
+    }) %>% rbindlist()
+  }
 }
+
+        ##set start and end date for FREH function
+        start_date <- "2018-05-01"
+        end_date <- "2019-04-30"
 
 
 ## Ghost hotel function

@@ -102,7 +102,7 @@ daily <-
   arrange(Property_ID, Date)
 
 
-## Trim listings to last available full year, May 2018-April 2019
+## Trim listings to last available full year, May 2018-April 2019, join property and daily file
 
 property <-
   property %>% 
@@ -114,12 +114,9 @@ daily <-
   daily %>% 
   filter(Property_ID %in% property$Property_ID,
          Date >= "2018-05-01",
-         Date <= "2019-04-30")
-
-
-## Join property and daily file
-
-daily <- inner_join(daily, st_drop_geometry(property))
+         Date <= "2019-04-30") %>%
+  inner_join(st_drop_geometry(property))  %>% 
+  select(Property_ID, Date, Status, Price, Airbnb_PID, HomeAway_PID, Airbnb_HID, Listing_Type)
 
 
 ## Find total reserved and available nights, and total revenue
@@ -127,76 +124,85 @@ daily <- inner_join(daily, st_drop_geometry(property))
 property <- 
   daily %>%
   group_by(Property_ID) %>% 
-  summarize(
+  summarise(
     n_reserved = sum(Status == "R"),
     n_available = sum(Status == "A" | Status == "R"),
-    revenue = sum((Status == "R") * Price),
-    FREH = if_else(
-      first(Listing_Type) == "Entire home/apt" & n_reserved >= 90 &
-        n_available >= 183, TRUE, FALSE)) %>% 
+    revenue = sum((Status == "R") * Price)) %>% 
   inner_join(property, .)
 
 
-## Find multi-listings
 
-daily <- strr_multilistings(daily, listing_type = Listing_Type,
-                            host_ID = Airbnb_HID, date = Date)
+## Find multi-listings and total listings, and Frequenty Rented Entire Homes (FREH)
 
-property <- 
-  daily %>%
+multilistings <- strr_multilistings(daily, listing_type = Listing_Type,
+                                    host_ID = Airbnb_HID, date = Date) %>%
   group_by(Property_ID) %>% 
-  summarize(ML = as.logical(ceiling(mean(ML)))) %>% 
-  inner_join(property, .)
+  summarise(ML = as.logical(ceiling(mean(ML))))
 
-total_listings <-as.data.frame(table(property$Airbnb_HID, dnn = "Airbnb_HID"), responseName =  "Total_Listings") %>% mutate(Airbnb_HID = as.numeric(as.character(Airbnb_HID)))
+total_listings <-as.data.frame(table(property$Airbnb_HID, dnn = "Airbnb_HID"), responseName =  "Total_Listings") %>% 
+  mutate(Airbnb_HID = as.numeric(as.character(Airbnb_HID)))
+
+daily_FREH <- strr_FREH(daily, start_date = end_date, end_date = end_date) %>%
+  filter(FREH == TRUE) %>%
+  select(Property_ID) %>%
+  distinct()
+
+property <- property %>%
+  inner_join(multilistings) %>%
+  inner_join(total_listings)%>%
+  mutate (
+    FRML = if_else(ML == "TRUE" & n_reserved >= 90 & n_available >= 183, TRUE, FALSE),
+    FREH = property$Property_ID %in% daily_FREH$Property_ID)
+  
+write.csv(property, file = "data/property_cleaned.csv")
+
+
+rm(multilistings, total_listings, daily_FREH)
+
 
 
 ##convert variables to numeric for calculations
 
 property_numeric <- property %>% 
   mutate(FREH = as.binary(FREH, logic=TRUE),
+         FRML = as.binary(FRML, logic=TRUE),
         ML = as.binary(ML, logic=TRUE),
         Superhost = as.binary(Superhost, logic=TRUE),
-        Last_Update = as.numeric(difftime(Scraped, Calender_Last_Update, units = "days")),
+        Last_Update = as.numeric(difftime(Scraped, Last_Update, units = "days")),
         Age = as.numeric(difftime(Scraped, Created, units = "days")),
         Downtown = if_else(Neighbourhood == "Ville-Marie" | Neighbourhood == "Le Plateau-Mont-Royal", 1, 0),
         Cancellation_Strictness = case_when(
           str_detect(Cancellation_Policy, "Flexible")     ~ 0,
-          str_detect(Cancellation_Policy, "Moderate")     ~ 1,
-          str_detect(Cancellation_Policy, "Strict")       ~ 2),
-        Checkin_Time = as.binary(if_else(is.na(Checkin_Time) | Checkin_Time == "Flexible", 0, 1), logic = TRUE),
-        Checkout_Time = as.binary(if_else(is.na(Checkout_Time), 0, 1), logic = TRUE),
-        Security_Deposit = as.binary(if_else(is.na(Security_Deposit), 0, 1), logic = TRUE),
-        Cleaning_Fee = as.binary(if_else(is.na(Cleaning_Fee), 0, 1), logic = TRUE),
-        Ex_People_Fee = as.binary(if_else(is.na(Ex_People_Fee), 0, 1), logic = TRUE),
-        HomeAway_PID = as.binary(if_else(is.na(HomeAway_PID), 0, 1), logic = TRUE),
+          str_detect(Cancellation_Policy, "Moderate")     ~ 0.5,
+          str_detect(Cancellation_Policy, "Strict")       ~ 1),
+        Checkin_Time = if_else(is.na(Checkin_Time) | Checkin_Time == "Flexible", 0, 1),
+        Checkout_Time = if_else(is.na(Checkout_Time), 0, 1),
+        Security_Deposit = if_else(is.na(Security_Deposit), 0, 1),
+        Cleaning_Fee = if_else(is.na(Cleaning_Fee), 0, 1),
+        Ex_People_Fee = if_else(is.na(Ex_People_Fee), 0, 1),
+        Strictness_Index = (Checkin_Time + Checkout_Time + Security_Deposit + Cleaning_Fee + Ex_People_Fee + Cancellation_Strictness)/6,
+        HomeAway_PID = if_else(is.na(HomeAway_PID), 0, 1),
         Occupancy_Rate = if_else(n_available == 0, 0, n_reserved/n_available)) %>% 
-  select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID, -Calender_Last_Update, -Cancellation_Policy) %>% st_drop_geometry()
+  select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID, -Cancellation_Policy, -Cancellation_Strictness, -Checkin_Time, -Checkout_Time, -Security_Deposit, -Cleaning_Fee, -Ex_People_Fee) %>% st_drop_geometry()
+
+property_matrix <- property_numeric %>% 
+  select (-Airbnb_HID) %>%
+  correlate()  
 
 
 ##Group by host and make summary variables for each of their listings
-property_correlation <- property_numeric %>%
+host_numeric <- property_numeric %>%
   group_by(Airbnb_HID) %>% 
-  summarise_all(list(mean)) %>%
-  inner_join(total_listings, .) 
- 
+  summarise_all(list(mean))  
+
+host_matrix <- host_numeric %>% 
+  select (-Airbnb_HID) %>%
+  correlate()  
+
+View(property_matrix %>% stretch(na.rm = TRUE, remove.dups = TRUE))
+
+
   
-property_correlation$Total_Listings <- scale(property_correlation$Total_Listings)
-rcorr(total)
 
-cor(property_correlation$Total_Listings, property_correlation$ML, use = "complete.obs")
-
-
-corr_matrix <- property_correlation %>% 
-                select(-Airbnb_HID) %>% 
-                mutate(total_listings %>% index()) %>%
-                as.matrix() %>% 
-                rcorr()
-
-corr_matrix <- flattenCorrMatrix(corr_matrix$r, corr_matrix$P)
-
-
-write.csv(corr_matrix, 'corr_matrix1.csv')
-
-corrplot(as.matrix(property_correlation), is.corr=FALSE)
-?corrplot
+focus(mpg:drat, mirror = TRUE) %>% 
+  network_plot()
