@@ -4,12 +4,14 @@
 
 
 library(tidyverse)
-library(sf)
 library(binaryLogic)
-library(Hmisc)
 library(corrplot)
 library(corrr)
+library(igraph)
+library(ggraph)
 library(data.table)
+
+
 
 ## Multilistings function
 

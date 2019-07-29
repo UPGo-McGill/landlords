@@ -150,9 +150,10 @@ daily_FREH <- strr_FREH(daily, start_date = end_date, end_date = end_date) %>%
 property <- property %>%
   inner_join(multilistings) %>%
   inner_join(total_listings)%>%
-  mutate (
-    FRML = if_else(ML == "TRUE" & n_reserved >= 90 & n_available >= 183, TRUE, FALSE),
-    FREH = property$Property_ID %in% daily_FREH$Property_ID)
+  mutate (FREH = property$Property_ID %in% daily_FREH$Property_ID) 
+
+active_property <- property %>%
+  filter(n_reserved > 0)
   
 write.csv(property, file = "data/property_cleaned.csv")
 
@@ -163,7 +164,7 @@ rm(multilistings, total_listings, daily_FREH)
 
 ##convert variables to numeric for calculations
 
-property_numeric <- property %>% 
+property_numeric <- active_property %>% 
   mutate(FREH = as.binary(FREH, logic=TRUE),
          FRML = as.binary(FRML, logic=TRUE),
         ML = as.binary(ML, logic=TRUE),
@@ -183,25 +184,30 @@ property_numeric <- property %>%
         Strictness_Index = (Checkin_Time + Checkout_Time + Security_Deposit + Cleaning_Fee + Ex_People_Fee + Cancellation_Strictness)/6,
         HomeAway_PID = if_else(is.na(HomeAway_PID), 0, 1),
         Occupancy_Rate = if_else(n_available == 0, 0, n_reserved/n_available)) %>% 
-  select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID, -Cancellation_Policy, -Cancellation_Strictness, -Checkin_Time, -Checkout_Time, -Security_Deposit, -Cleaning_Fee, -Ex_People_Fee) %>% st_drop_geometry()
+  select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, 
+         -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID, 
+         -Cancellation_Policy, -Cancellation_Strictness, -Checkin_Time, 
+         -Checkout_Time, -Security_Deposit, -Cleaning_Fee, -Ex_People_Fee, -Reviews) %>% 
+  st_drop_geometry() %>%
+  mutate_all(~replace(., is.na(.), 0))
 
-property_matrix <- property_numeric %>% 
-  select (-Airbnb_HID) %>%
-  correlate()  
 
-
-##Group by host and make summary variables for each of their listings
+##Group by host and make find the mean of all their listings for each value
 host_numeric <- property_numeric %>%
   group_by(Airbnb_HID) %>% 
-  summarise_all(list(mean))  
+  summarise_all(list(mean)) %>%
+  mutate (Total_Revenue = revenue*Total_Listings)
 
 host_matrix <- host_numeric %>% 
   select (-Airbnb_HID) %>%
   correlate()  
 
-View(property_matrix %>% stretch(na.rm = TRUE, remove.dups = TRUE))
+View(host_matrix %>% stretch(na.rm = TRUE, remove.dups = TRUE))
 
-
+host_matrix %>%
+  rearrange(method = "MDS", absolute = FALSE) %>%
+  shave() %>% 
+  rplot(shape = 15, colors = c("red", "green"))
   
 
 focus(mpg:drat, mirror = TRUE) %>% 
