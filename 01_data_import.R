@@ -132,15 +132,12 @@ property <-
 
 
 
-## Find multi-listings and total listings, and Frequenty Rented Entire Homes (FREH)
+## Find multi-listings and and Frequenty Rented Entire Homes (FREH)
 
 multilistings <- strr_multilistings(daily, listing_type = Listing_Type,
                                     host_ID = Airbnb_HID, date = Date) %>%
   group_by(Property_ID) %>% 
   summarise(ML = as.logical(ceiling(mean(ML))))
-
-total_listings <-as.data.frame(table(property$Airbnb_HID, dnn = "Airbnb_HID"), responseName =  "Total_Listings") %>% 
-  mutate(Airbnb_HID = as.numeric(as.character(Airbnb_HID)))
 
 daily_FREH <- strr_FREH(daily, start_date = end_date, end_date = end_date) %>%
   filter(FREH == TRUE) %>%
@@ -149,7 +146,6 @@ daily_FREH <- strr_FREH(daily, start_date = end_date, end_date = end_date) %>%
 
 property <- property %>%
   inner_join(multilistings) %>%
-  inner_join(total_listings)%>%
   mutate (FREH = property$Property_ID %in% daily_FREH$Property_ID) 
 
 active_property <- property %>%
@@ -166,12 +162,10 @@ rm(multilistings, total_listings, daily_FREH)
 
 property_numeric <- active_property %>% 
   mutate(FREH = as.binary(FREH, logic=TRUE),
-         FRML = as.binary(FRML, logic=TRUE),
-        ML = as.binary(ML, logic=TRUE),
         Superhost = as.binary(Superhost, logic=TRUE),
         Last_Update = as.numeric(difftime(Scraped, Last_Update, units = "days")),
         Age = as.numeric(difftime(Scraped, Created, units = "days")),
-        Downtown = if_else(Neighbourhood == "Ville-Marie" | Neighbourhood == "Le Plateau-Mont-Royal", 1, 0),
+     #   Downtown = if_else(Neighbourhood == "Ville-Marie" | Neighbourhood == "Le Plateau-Mont-Royal", 1, 0),
         Cancellation_Strictness = case_when(
           str_detect(Cancellation_Policy, "Flexible")     ~ 0,
           str_detect(Cancellation_Policy, "Moderate")     ~ 0.5,
@@ -181,28 +175,64 @@ property_numeric <- active_property %>%
         Security_Deposit = if_else(is.na(Security_Deposit), 0, 1),
         Cleaning_Fee = if_else(is.na(Cleaning_Fee), 0, 1),
         Ex_People_Fee = if_else(is.na(Ex_People_Fee), 0, 1),
-        Strictness_Index = (Checkin_Time + Checkout_Time + Security_Deposit + Cleaning_Fee + Ex_People_Fee + Cancellation_Strictness)/6,
+        Strictness_Index = (Checkin_Time + Checkout_Time + Security_Deposit + 
+                              Cleaning_Fee + Ex_People_Fee + Cancellation_Strictness)/6,
+        Minimum_Stay_30 = if_else(Minimum_Stay >= 30, 1, 0),
+        Minimum_Stay_1 = if_else(Minimum_Stay <=1, 1, 0),
+        Minimum_Stay_2to3 = if_else(Minimum_Stay ==2 | Minimum_Stay ==3 , 1, 0),
+        Minimum_Stay_4to29 = if_else(Minimum_Stay >3 & Minimum_Stay <30 , 1, 0),
+        Response_100 = if_else(Response_Rate < 100,0, 1),
+    #    Response_90 = if_else(Response_Rate < 90,0, 1),
+        EH = if_else(Listing_Type == "Entire home/apt", 1, 0),
+        PR = if_else(Listing_Type == "Private room", 1, 0),
+        SR = if_else(Listing_Type == "Shared room", 1, 0),
         HomeAway_PID = if_else(is.na(HomeAway_PID), 0, 1),
-        Occupancy_Rate = if_else(n_available == 0, 0, n_reserved/n_available)) %>% 
+        Occupancy_Rate = if_else(n_available == 0, 0, n_reserved/n_available),
+        avg_nightly_rate = revenue/n_reserved) %>% 
   select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, 
          -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID, 
          -Cancellation_Policy, -Cancellation_Strictness, -Checkin_Time, 
-         -Checkout_Time, -Security_Deposit, -Cleaning_Fee, -Ex_People_Fee, -Reviews) %>% 
-  st_drop_geometry() %>%
-  mutate_all(~replace(., is.na(.), 0))
+         -Checkout_Time, -Security_Deposit, -Cleaning_Fee, -Ex_People_Fee, -Reviews, -ML) %>% 
+  st_drop_geometry() 
+
 
 
 ##Group by host and make find the mean of all their listings for each value
 host_numeric <- property_numeric %>%
   group_by(Airbnb_HID) %>% 
+  mutate(Total_Listings = n(),
+         Total_EH = sum(EH)) %>%
   summarise_all(list(mean)) %>%
-  mutate (Total_Revenue = revenue*Total_Listings)
+  mutate (Total_Revenue = revenue*Total_Listings,
+          Listing_2to9 = if_else(Total_Listings > 1 & Total_Listings < 10, 1, 0),
+          Listing_1 = if_else(Total_Listings == 1, 1, 0),
+          Listing_10up = if_else(Total_Listings > 10, 1, 0),
+          Listings = case_when(
+            Total_Listings == 1    ~ "1 listing",
+            Total_Listings > 1 & Total_Listings < 10     ~ "2-9 listings",
+            Total_Listings > 10     ~ "10+ listings"), 
+          Superhost_status = case_when(
+            Superhost == 1    ~ "Superhost",
+            Superhost ==0     ~ "Other hosts"))
 
+host_numeric %>% filter(Minimum_Stay <= 7) %>% 
+  filter(n_reserved >90) %>% 
+  ggplot(aes(Minimum_Stay, count(Minimum_Stay))) + 
+  geom_point(aes(size = Total_Listings))
+
+
+host_numeric %>% filter(Minimum_Stay <= 7 & n_reserved >90 & n_available > 183) %>% ggplot(aes(Minimum_Stay, colour = Listings)) +
+  geom_smooth()
+
+host_numeric %>% filter(Minimum_Stay <= 7) %>% ggplot(aes(Total_Listings, Strictness_Index, colour = Superhost)) +
+  geom_freqpoly()
+
+##Create correlation matrix
 host_matrix <- host_numeric %>% 
-  select (-Airbnb_HID) %>%
+  select (-Airbnb_HID, -Minimum_Stay, -Listings) %>%
   correlate()  
 
-View(host_matrix %>% stretch(na.rm = TRUE, remove.dups = TRUE))
+View(host_matrix %>% stretch(na.rm = TRUE, remove.dups = TRUE) %>% mutate (r = round(r,3)))
 
 host_matrix %>%
   rearrange(method = "MDS", absolute = FALSE) %>%
