@@ -3,12 +3,12 @@
 
 ## Load helpers
 
-source("R/01_helper_functions.R")
+source("R/00_helper_functions.R")
 
 
 ## Import Airbnb files
-property <-
-  read_csv("data/Canada-montreal_Property_Match_2019-05-28.csv", col_types = cols_only(
+
+property <- read_csv("data/Canada-montreal_Property_Match_2019-05-28.csv", col_types = cols_only(
     `Property ID` = col_character(),
     `Listing Title` = col_character(),
     `Property Type` = col_character(),
@@ -19,6 +19,8 @@ property <-
     Longitude = col_double(),
     Neighborhood = col_character(),
     `Bedrooms` = col_double(),
+    `Bathrooms` = col_double(),
+    `Max Guests` = col_double(),
     `Calendar Last Updated` = col_date(format = ""),
     `Response Rate` = col_double(),
     `Airbnb Superhost` = col_logical(),
@@ -32,18 +34,18 @@ property <-
     `Minimum Stay` = col_double(),
     `Number of Reviews` = col_double(),
     `Number of Photos` = col_double(), 
+    `Instantbook Enabled` = col_logical(),
     `Overall Rating` = col_double(),
     `Airbnb Property ID` = col_double(),
     `Airbnb Host ID` = col_double(),
     `HomeAway Property ID` = col_character(),
     `HomeAway Property Manager` = col_character()))%>%
-    
     set_names(c(    "Property_ID", "Listing_Title", "Property_Type", "Listing_Type",
                     "Created", "Scraped", "Latitude", "Longitude", "Neighbourhood",
-                    "Bedrooms", "Last_Update", "Response_Rate", 
+                    "Bedrooms", "Bath", "Max_Guests", "Last_Update", "Response_Rate", 
                     "Superhost", "HomeAway_PP", "Cancellation_Policy", "Security_Deposit",
                     "Cleaning_Fee", "Ex_People_Fee", "Checkin_Time", "Checkout_Time",
-                    "Minimum_Stay", "Reviews", "Photos", "Rating",
+                    "Minimum_Stay", "Reviews", "Photos", "Instantbook", "Rating",
                     "Airbnb_PID", "Airbnb_HID", "HomeAway_PID", "HomeAway_Manager")) %>% 
   arrange(Property_ID) %>% 
   st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326) %>%
@@ -144,17 +146,39 @@ daily_FREH <- strr_FREH(daily, start_date = end_date, end_date = end_date) %>%
   select(Property_ID) %>%
   distinct()
 
+
 property <- property %>%
   inner_join(multilistings) %>%
   mutate (FREH = property$Property_ID %in% daily_FREH$Property_ID) 
 
+rm(multilistings, daily_FREH)
+
+# Identify ghost hotels
+
+GH_list <-
+  strr_ghost(property, Property_ID, Airbnb_HID, Created, Scraped, "2018-05-01",
+             "2019-04-30", listing_type = Listing_Type) %>% 
+  pull(property_IDs) %>%
+  unlist() %>%
+  unique()
+
+property <-
+  property %>% 
+  mutate(GH = if_else(Property_ID %in% GH_list, TRUE, FALSE))
+
+rm(GH_list)
+
+##Remove listings that were not reserved once over the last year
+
 active_property <- property %>%
   filter(n_reserved > 0)
-  
+
+
+##save as new file   
 write.csv(property, file = "data/property_cleaned.csv")
 
 
-rm(multilistings, total_listings, daily_FREH)
+
 
 
 
@@ -182,17 +206,20 @@ property_numeric <- active_property %>%
         Minimum_Stay_2to3 = if_else(Minimum_Stay ==2 | Minimum_Stay ==3 , 1, 0),
         Minimum_Stay_4to29 = if_else(Minimum_Stay >3 & Minimum_Stay <30 , 1, 0),
         Response_100 = if_else(Response_Rate < 100,0, 1),
+        Instantbook = if_else(Instantbook == TRUE, 1, 0),
+        GH = if_else(GH == TRUE, 1, 0),
     #    Response_90 = if_else(Response_Rate < 90,0, 1),
-        EH = if_else(Listing_Type == "Entire home/apt", 1, 0),
-        PR = if_else(Listing_Type == "Private room", 1, 0),
-        SR = if_else(Listing_Type == "Shared room", 1, 0),
+    #    EH = if_else(Listing_Type == "Entire home/apt", 1, 0),
+    #    PR = if_else(Listing_Type == "Private room", 1, 0),
+    #    SR = if_else(Listing_Type == "Shared room", 1, 0),
         HomeAway_PID = if_else(is.na(HomeAway_PID), 0, 1),
         Occupancy_Rate = if_else(n_available == 0, 0, n_reserved/n_available),
         avg_nightly_rate = revenue/n_reserved) %>% 
   select(-Property_ID, -Listing_Type, -Listing_Title, -Created, -Scraped, 
-         -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID, 
-         -Cancellation_Policy, -Cancellation_Strictness, -Checkin_Time, 
-         -Checkout_Time, -Security_Deposit, -Cleaning_Fee, -Ex_People_Fee, -Reviews, -ML) %>% 
+         -Neighbourhood, -HomeAway_PP, -HomeAway_Manager, -Airbnb_PID 
+    #     -Cancellation_Policy, -Cancellation_Strictness, -Checkin_Time, 
+    #     -Checkout_Time, -Security_Deposit, -Cleaning_Fee, -Ex_People_Fee
+         ) %>% 
   st_drop_geometry() 
 
 
@@ -200,45 +227,74 @@ property_numeric <- active_property %>%
 ##Group by host and make find the mean of all their listings for each value
 host_numeric <- property_numeric %>%
   group_by(Airbnb_HID) %>% 
-  mutate(Total_Listings = n(),
-         Total_EH = sum(EH)) %>%
+  mutate(Total_Listings = n()) %>%
   summarise_all(list(mean)) %>%
   mutate (Total_Revenue = revenue*Total_Listings,
           Listing_2to9 = if_else(Total_Listings > 1 & Total_Listings < 10, 1, 0),
           Listing_1 = if_else(Total_Listings == 1, 1, 0),
-          Listing_10up = if_else(Total_Listings > 10, 1, 0),
-          Listings = case_when(
-            Total_Listings == 1    ~ "1 listing",
-            Total_Listings > 1 & Total_Listings < 10     ~ "2-9 listings",
-            Total_Listings > 10     ~ "10+ listings"), 
-          Superhost_status = case_when(
-            Superhost == 1    ~ "Superhost",
-            Superhost ==0     ~ "Other hosts"))
+          Listing_10up = if_else(Total_Listings > 10, 1, 0)) %>%
+  select (-Airbnb_HID)
 
-host_numeric %>% filter(Minimum_Stay <= 7) %>% 
-  filter(n_reserved >90) %>% 
-  ggplot(aes(Minimum_Stay, count(Minimum_Stay))) + 
-  geom_point(aes(size = Total_Listings))
+hosts_categorical <- host_numeric %>% mutate(
+Listings = case_when(
+ Total_Listings == 1    ~ "1 listing",
+  Total_Listings > 1 & Total_Listings < 10     ~ "2-9 listings",
+  Total_Listings > 10     ~ "10+ listings"), 
+Superhost = if_else(Superhost == 1, "Yes", "No"))
 
 
-host_numeric %>% filter(Minimum_Stay <= 7 & n_reserved >90 & n_available > 183) %>% ggplot(aes(Minimum_Stay, colour = Listings)) +
-  geom_smooth()
 
-host_numeric %>% filter(Minimum_Stay <= 7) %>% ggplot(aes(Total_Listings, Strictness_Index, colour = Superhost)) +
-  geom_freqpoly()
 
 ##Create correlation matrix
 host_matrix <- host_numeric %>% 
-  select (-Airbnb_HID, -Minimum_Stay, -Listings) %>%
-  correlate()  
+  correlate(method = "spearman") %>%  
+  stretch(na.rm = TRUE, remove.dups = TRUE) %>% 
+  mutate (r = round(r,3))
 
-View(host_matrix %>% stretch(na.rm = TRUE, remove.dups = TRUE) %>% mutate (r = round(r,3)))
+Superhost_corr <- host_matrix %>% 
+  filter(x == "Superhost" | y == "Superhost") %>% 
+  arrange(-r)
 
-host_matrix %>%
-  rearrange(method = "MDS", absolute = FALSE) %>%
-  shave() %>% 
-  rplot(shape = 15, colors = c("red", "green"))
+photos_corr <- host_matrix %>% 
+  filter(x == "Photos" | y == "Photos") %>% 
+  arrange(-r)
+
+Minimum_stay_corr <-  host_matrix %>% 
+  filter( str_detect(x, "^Minimum") | str_detect(y, "^Minimum")) %>% 
+  arrange(-r)
+
+no_HomeAway <- host_numeric %>% 
+  filter(HomeAway_PID == 0) %>%
+  correlate(method = "spearman") %>% 
+  stretch(na.rm = TRUE, remove.dups = TRUE) %>% 
+  mutate (r = round(r,3))
+
+availability_corr <- no_HomeAway %>%
+  filter(x == "n_reserved" | x == "n_available" | y == "n_reserved" | y == "n_available") %>% 
+  arrange(-r)
+
+revenue_corr <- no_HomeAway %>%
+  filter(x == "revenue" | x == "avg_nightly_rate" | y == "revenue" | y == "avg_nightly_rate" | y == "Total_Revenue") %>% 
+    arrange(-r)  
   
+View(host_matrix %>%
+       filter( str_detect(x, "^Minimum") | str_detect(y, "^Minimum")) %>% filter()%>% arrange(-r) )
 
-focus(mpg:drat, mirror = TRUE) %>% 
-  network_plot()
+
+GH <- host_numeric %>% filter(GH>0)
+
+GH_corr <- host_matrix %>%
+  filter(x == "GH" | y == "GH") %>% 
+  arrange(-r) 
+
+## Examine distribution of hosts' total listings
+host_numeric %>% count(cut_width(Total_Listings, 4))
+  
+##Find percentage of Superhosts
+mean(host_numeric$Instantbook, na.rm = TRUE)
+
+##Examine Response rate
+
+library(Hmisc)
+describe(hosts$GH)
+

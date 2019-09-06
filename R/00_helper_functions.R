@@ -9,7 +9,11 @@ library(corrplot)
 library(corrr)
 library(igraph)
 library(ggraph)
-library(caret)
+library(sf)
+library(dplyr)
+library(data.table)
+
+#library(caret)
 
 
 
